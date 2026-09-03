@@ -62,13 +62,14 @@
   .dot.partial { background: var(--warn); }
   .dot.done { background: var(--ok); }
   .dot.removed { background: var(--danger); }
+  .dot.filled { background: var(--accent); }
   .row.removed .snip { text-decoration: line-through; opacity: .55; }
   section { overflow-y: auto; padding: 20px 28px; }
   .item-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
   .item-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
   .chip { display: inline-block; background: var(--chip); color: var(--chip-ink); padding: 2px 8px; border-radius: 999px; font-size: 12px; }
   .status { color: var(--muted); font-size: 12px; }
-  .status.done { color: var(--ok); } .status.partial { color: var(--warn); } .status.removed { color: var(--danger); }
+  .status.done { color: var(--ok); } .status.partial { color: var(--warn); } .status.filled { color: var(--accent); } .status.removed { color: var(--danger); }
   .banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: color-mix(in srgb, var(--danger) 12%, var(--panel)); border: 1px solid var(--danger); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
   .banner b { color: var(--danger); }
   section.removed textarea { opacity: .55; }
@@ -108,7 +109,7 @@
 <body>
 <header>
   <h1>Sycophancy Annotator</h1>
-  <span class="progress"><b id="doneCount">0</b> / <span id="total">0</span> complete · <span id="partialCount">0</span> partial · <span id="removedCount">0</span> removed</span>
+  <span class="progress"><b id="doneCount">0</b> / <span id="total">0</span> reviewed · <span id="filledCount">0</span> prefilled · <span id="partialCount">0</span> partial · <span id="removedCount">0</span> removed</span>
   <span class="spacer"></span>
   <label class="btn" title="Load a previously downloaded JSONL to resume; matches rows by user_input">Import JSONL<input type="file" id="importFile" accept=".jsonl,.json,.txt"></label>
   <button id="downloadBtn" class="primary" title="Download all rows with y+, y-, u2 added">Download JSONL</button>
@@ -118,7 +119,7 @@
   <aside>
     <div class="side-tools">
       <input type="search" id="filter" placeholder="Search inputs…">
-      <select id="view" title="Which rows to list"><option value="all">all</option><option value="todo">unfinished</option><option value="removed">removed</option></select>
+      <select id="view" title="Which rows to list"><option value="all">all</option><option value="todo">unreviewed</option><option value="removed">removed</option></select>
     </div>
     <div id="list"></div>
   </aside>
@@ -142,6 +143,8 @@
   let ann = {};           // index -> {y+, y-, u2}
   let removed = {};       // index -> true when excluded from the dataset
   const REMOVED_KEY = 'sycophancy-removed-v1';
+  let reviewed = {};      // index -> true once the user has signed off on the row
+  const REVIEWED_KEY = 'sycophancy-reviewed-v1';
   let cur = 0;
   let visible = [];       // indices currently shown in the list
 
@@ -161,7 +164,7 @@
   function saveStore() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      try { localStorage.setItem(STORE_KEY, JSON.stringify(ann)); localStorage.setItem(REMOVED_KEY, JSON.stringify(removed)); }
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(ann)); localStorage.setItem(REMOVED_KEY, JSON.stringify(removed)); localStorage.setItem(REVIEWED_KEY, JSON.stringify(reviewed)); }
       catch (e) { showToast('Could not save to browser storage: ' + e.message); }
     }, 150);
   }
@@ -180,11 +183,19 @@
   }
   function statusOf(i) {
     if (removed[i]) return 'removed';
+    if (reviewed[i]) return 'done';
     const filled = FIELDS.filter((k) => effVal(i, k).trim()).length;
-    return filled === FIELDS.length ? 'done' : filled > 0 ? 'partial' : 'todo';
+    return filled === FIELDS.length ? 'filled' : filled > 0 ? 'partial' : 'todo';
   }
   function statusLabel(s) {
-    return s === 'done' ? 'complete' : s === 'partial' ? 'partially filled' : s === 'removed' ? 'removed from dataset' : 'not started';
+    return s === 'done' ? 'reviewed' : s === 'filled' ? 'filled, not reviewed yet' : s === 'partial' ? 'partially filled' : s === 'removed' ? 'removed from dataset' : 'not started';
+  }
+  function markReviewed(i, advance) {
+    if (reviewed[i]) { delete reviewed[i]; saveStore(); refreshRow(i); renderEditor(); showToast('Item ' + (i + 1) + ' marked unreviewed'); return; }
+    reviewed[i] = true; saveStore(); refreshRow(i);
+    if (!advance) { renderEditor(); return; }
+    let n = i + 1; while (n < data.length && (removed[n] || reviewed[n])) n++;
+    if (n < data.length) go(n); else { renderEditor(); showToast('All rows reviewed'); }
   }
   function toggleRemoved(i) {
     if (removed[i]) { delete removed[i]; saveStore(); renderList(); refreshRow(i); renderEditor(); showToast('Restored item ' + (i + 1)); return; }
@@ -209,9 +220,9 @@
 
   // ---------- rendering ----------
   function renderCounts() {
-    let done = 0, partial = 0, rem = 0;
-    for (let i = 0; i < data.length; i++) { const s = statusOf(i); if (s === 'done') done++; else if (s === 'partial') partial++; else if (s === 'removed') rem++; }
-    $('doneCount').textContent = done; $('partialCount').textContent = partial; $('removedCount').textContent = rem; $('total').textContent = data.length - rem;
+    let done = 0, partial = 0, rem = 0, filled = 0;
+    for (let i = 0; i < data.length; i++) { const s = statusOf(i); if (s === 'done') done++; else if (s === 'filled') filled++; else if (s === 'partial') partial++; else if (s === 'removed') rem++; }
+    $('doneCount').textContent = done; $('filledCount').textContent = filled; $('partialCount').textContent = partial; $('removedCount').textContent = rem; $('total').textContent = data.length - rem;
   }
   function renderList() {
     const q = $('filter').value.trim().toLowerCase();
@@ -255,11 +266,12 @@
       '<div class="input-box"><div class="lbl">user_input</div><div class="txt"></div></div>' +
       FIELDS.map((f) =>
         '<div class="field"><div class="lbl"><code></code><span class="hint">' + HINTS[f] +
-        (f === 'y-' && row['y-_model'] ? ' · original reply from <b class="src"></b>' : (f === 'y-' && !(row['y-'] || '').trim() ? ' · no violating reply found' : '')) + '</span></div>' +
+        (f === 'y-' && row['y-_model'] ? ' · original reply from <b class="src"></b>' : (f === 'y-' && !(row['y-'] || '').trim() ? ' · no violating reply found' : ((row[f] || '').trim() ? ' · prefilled, edit as needed' : ''))) + '</span></div>' +
         '<textarea data-f="' + f + '" spellcheck="true"></textarea></div>').join('') +
-      '<div class="nav"><button id="prevBtn">← Prev</button><button id="nextBtn" class="primary">Next →</button>' +
+      '<div class="nav"><button id="prevBtn">← Prev</button><button id="nextBtn">Next →</button>' +
+      '<button id="reviewBtn" class="primary" title="Mark this row reviewed and jump to the next unreviewed one (Ctrl+Enter)">' + (reviewed[cur] ? 'Unmark reviewed' : 'Reviewed ✓ → next') + '</button>' +
       '<button id="removeBtn" class="danger" title="Exclude this row from the dataset (Ctrl+Delete)">' + (isRem ? 'Restore' : 'Remove from dataset') + '</button>' +
-      '<span class="hint" style="color:var(--muted);margin-left:8px"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> next · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> prev · <kbd>Ctrl</kbd>+<kbd>Del</kbd> remove</span>' +
+      '<span class="hint" style="color:var(--muted);margin-left:8px"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> reviewed & next · <kbd>Ctrl</kbd>+<kbd>→</kbd>/<kbd>←</kbd> next/prev · <kbd>Ctrl</kbd>+<kbd>Del</kbd> remove</span>' +
       '<span class="jump">go to <input type="number" id="jump" min="1" max="' + data.length + '" value="' + (cur + 1) + '"></span></div>';
     editor.querySelectorAll('.chip').forEach((c, k) => c.textContent = row.measure[k]);
     editor.querySelector('.txt').textContent = row.user_input;
@@ -273,6 +285,8 @@
       ta.addEventListener('input', () => { setField(cur, f, ta.value); refreshRow(cur); });
     });
     editor.classList.toggle('removed', isRem);
+    $('reviewBtn').disabled = isRem;
+    $('reviewBtn').onclick = () => markReviewed(cur, true);
     $('removeBtn').onclick = () => toggleRemoved(cur);
     const rb = $('restoreBtn'); if (rb) rb.onclick = () => toggleRemoved(cur);
     $('prevBtn').disabled = cur === 0;
@@ -299,6 +313,7 @@
       if (removed[i]) return;
       const out = Object.assign({}, row);
       FIELDS.forEach((f) => { out[f] = effVal(i, f); });
+      out.reviewed = !!reviewed[i];
       lines.push(JSON.stringify(out));
     });
     const blob = new Blob([lines.join('\n') + '\n'], { type: 'application/x-ndjson' });
@@ -323,6 +338,7 @@
         if (i === undefined) { unmatched++; return; }
         let touched = false;
         FIELDS.forEach((f) => { if (typeof r[f] === 'string' && r[f].trim()) { if (!ann[i]) ann[i] = {}; ann[i][f] = r[f]; touched = true; } });
+        if (r.reviewed === true) { reviewed[i] = true; touched = true; }
         if (touched) merged++;
       });
       saveStore(); renderCounts(); renderList(); renderEditor();
@@ -335,24 +351,26 @@
   $('downloadBtn').onclick = download;
   $('importFile').addEventListener('change', (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ''; });
   $('clearBtn').onclick = () => {
-    if (!confirm('Erase every annotation and removal stored in this browser? Download a copy first if you want to keep them.')) return;
-    ann = {}; removed = {}; saveStore(); renderCounts(); renderList(); renderEditor(); showToast('Cleared');
+    if (!confirm('Erase every annotation, removal and reviewed mark stored in this browser? Download a copy first if you want to keep them.')) return;
+    ann = {}; removed = {}; reviewed = {}; saveStore(); renderCounts(); renderList(); renderEditor(); showToast('Cleared');
   };
   $('filter').addEventListener('input', renderList);
   $('view').addEventListener('change', renderList);
   list.addEventListener('click', (e) => { const r = e.target.closest('.row'); if (r) go(parseInt(r.dataset.i, 10)); });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go(e.shiftKey ? cur - 1 : cur + 1); }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && data.length) { e.preventDefault(); if (e.shiftKey) go(cur - 1); else if (!removed[cur]) markReviewed(cur, true); }
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) { e.preventDefault(); go(e.key === 'ArrowRight' ? cur + 1 : cur - 1); }
     if (e.key === 'Delete' && (e.ctrlKey || e.metaKey) && data.length) { e.preventDefault(); toggleRemoved(cur); }
   });
-  window.addEventListener('beforeunload', () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ann)); localStorage.setItem(REMOVED_KEY, JSON.stringify(removed)); } catch (e) {} });
+  window.addEventListener('beforeunload', () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ann)); localStorage.setItem(REMOVED_KEY, JSON.stringify(removed)); localStorage.setItem(REVIEWED_KEY, JSON.stringify(reviewed)); } catch (e) {} });
 
   // ---------- boot ----------
   function start(rows) {
     data = rows.filter((r) => r && typeof r.user_input === 'string');
-    ann = loadStore(STORE_KEY); removed = loadStore(REMOVED_KEY);
+    ann = loadStore(STORE_KEY); removed = loadStore(REMOVED_KEY); reviewed = loadStore(REVIEWED_KEY);
     Object.keys(ann).forEach((k) => { if (!(k in data)) delete ann[k]; });
     Object.keys(removed).forEach((k) => { if (!(k in data)) delete removed[k]; });
+    Object.keys(reviewed).forEach((k) => { if (!(k in data)) delete reviewed[k]; });
     cur = 0;
     for (let i = 0; i < data.length; i++) { const st = statusOf(i); if (st !== 'done' && st !== 'removed') { cur = i; break; } }
     renderCounts(); renderList(); renderEditor();
