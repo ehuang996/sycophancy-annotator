@@ -81,6 +81,8 @@
   .field .lbl { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
   .field .lbl code { font-size: 13px; font-weight: 600; background: var(--chip); color: var(--chip-ink); padding: 1px 6px; border-radius: 4px; }
   .field .hint { color: var(--muted); font-size: 12px; }
+  .field .hint b { color: var(--ink); font-weight: 600; }
+  textarea[data-f="y-"] { min-height: 200px; }
   textarea {
     width: 100%; min-height: 96px; resize: vertical; padding: 10px 12px;
     border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit;
@@ -165,17 +167,20 @@
   }
 
   // ---------- helpers ----------
-  function getAnn(i) { return ann[i] || {}; }
+  function effVal(i, f) {
+    const a = ann[i];
+    if (a && Object.prototype.hasOwnProperty.call(a, f)) return a[f];
+    const d = data[i] && data[i][f];
+    return typeof d === 'string' ? d : '';
+  }
   function setField(i, f, v) {
     if (!ann[i]) ann[i] = {};
     ann[i][f] = v;
-    if (FIELDS.every((k) => !(ann[i][k] || '').trim())) delete ann[i];
     saveStore();
   }
   function statusOf(i) {
     if (removed[i]) return 'removed';
-    const a = getAnn(i);
-    const filled = FIELDS.filter((k) => (a[k] || '').trim()).length;
+    const filled = FIELDS.filter((k) => effVal(i, k).trim()).length;
     return filled === FIELDS.length ? 'done' : filled > 0 ? 'partial' : 'todo';
   }
   function statusLabel(s) {
@@ -241,7 +246,7 @@
   }
   function renderEditor() {
     if (!data.length) { editor.innerHTML = '<div class="empty">No data loaded.</div>'; return; }
-    const row = data[cur], a = getAnn(cur), s = statusOf(cur), isRem = s === 'removed';
+    const row = data[cur], s = statusOf(cur), isRem = s === 'removed';
     const chips = (row.measure || []).map((m) => '<span class="chip"></span>').join(' ');
     editor.innerHTML =
       '<div class="item-head"><h2>Item ' + (cur + 1) + ' of ' + data.length + '</h2>' + chips +
@@ -249,7 +254,8 @@
       (isRem ? '<div class="banner"><b>Removed from dataset.</b> This row is left out of the downloaded JSONL. <button id="restoreBtn">Restore</button></div>' : '') +
       '<div class="input-box"><div class="lbl">user_input</div><div class="txt"></div></div>' +
       FIELDS.map((f) =>
-        '<div class="field"><div class="lbl"><code></code><span class="hint">' + HINTS[f] + '</span></div>' +
+        '<div class="field"><div class="lbl"><code></code><span class="hint">' + HINTS[f] +
+        (f === 'y-' && row['y-_model'] ? ' · original reply from <b class="src"></b>' : (f === 'y-' && !(row['y-'] || '').trim() ? ' · no violating reply found' : '')) + '</span></div>' +
         '<textarea data-f="' + f + '" spellcheck="true"></textarea></div>').join('') +
       '<div class="nav"><button id="prevBtn">← Prev</button><button id="nextBtn" class="primary">Next →</button>' +
       '<button id="removeBtn" class="danger" title="Exclude this row from the dataset (Ctrl+Delete)">' + (isRem ? 'Restore' : 'Remove from dataset') + '</button>' +
@@ -260,8 +266,9 @@
     editor.querySelectorAll('.field').forEach((fe, k) => {
       const f = FIELDS[k];
       fe.querySelector('code').textContent = f;
+      const src = fe.querySelector('.src'); if (src) src.textContent = row['y-_model'];
       const ta = fe.querySelector('textarea');
-      ta.value = a[f] || '';
+      ta.value = effVal(cur, f);
       ta.disabled = isRem;
       ta.addEventListener('input', () => { setField(cur, f, ta.value); refreshRow(cur); });
     });
@@ -290,8 +297,8 @@
     const lines = [];
     data.forEach((row, i) => {
       if (removed[i]) return;
-      const a = getAnn(i), out = Object.assign({}, row);
-      FIELDS.forEach((f) => { out[f] = a[f] || ''; });
+      const out = Object.assign({}, row);
+      FIELDS.forEach((f) => { out[f] = effVal(i, f); });
       lines.push(JSON.stringify(out));
     });
     const blob = new Blob([lines.join('\n') + '\n'], { type: 'application/x-ndjson' });
